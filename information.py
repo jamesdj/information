@@ -94,7 +94,7 @@ def keep_nonnan_overlap(variables):
     return variables
 
 
-def add_jitter(variables, jitter_scale = 1E-10):
+def add_jitter(variables, jitter_scale=1E-10):
     # assumes variables are all of same length
     jitters = [jitter_scale * np.random.uniform(size=len(v)) for v in variables]
     variables = [variables[i] + jitters[i] for i in range(len(variables))]
@@ -129,7 +129,7 @@ def compute_mutual_information(x, y, z=None, n_grid=25, var_types=None,
     variables = keep_nonnan_overlap(variables)
     #print([len(v) for v in variables])
     n_overlap = len(variables[0])
-    if n_overlap < 3:
+    if n_overlap < 2:
         return 0
     variables = add_jitter(variables)
     grids = [np.linspace(v.min(), v.max(), n_grid) for v in variables]

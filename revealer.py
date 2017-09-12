@@ -124,6 +124,7 @@ def plot_matches(t, features, selected):
     plt.yticks(range(n), to_show.index, **{'fontsize':20})
     plt.ylabel("features", fontsize=20)
     plt.xlabel('samples', fontsize=20)
+    plt.show()
 
 
 def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parallel=True):

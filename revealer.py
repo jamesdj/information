@@ -109,7 +109,7 @@ def compute_cics(target, feature_df, seed=None, parallel=True):
     return ics
 
 
-def plot_matches(t, features, selected):
+def plot_matches(t, features, selected, out_file=None):
     t = t.sort_values(ascending=False)
     to_show = pd.concat([t, features.loc[t.index, selected]], axis=1).T
     plt.matshow(to_show)
@@ -125,6 +125,8 @@ def plot_matches(t, features, selected):
     plt.ylabel("features", fontsize=20)
     plt.xlabel('samples', fontsize=20)
     plt.show()
+    if out_file is not None:
+        plt.savefig(out_file)
 
 
 def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parallel=True):

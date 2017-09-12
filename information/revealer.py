@@ -176,9 +176,22 @@ def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parall
     are_binary = pd.Series([is_binary(features_df.loc[:, feature]) for feature in features_df.columns],
                            index=features_df.columns)
     """
-    Since the bandwidth is selected for each individual variable, not jointly, we could save some unnecessary
-     recomputation by pre-selecting all the bandwidths here and passing them to the IC computation.
-    This is not the main bottleneck; the savings may not be large. But it would make sense to try it.
+    Missing functionality:
+    - consolidation of identical or very similar features
+    - normalization of features
+        - this is important only for visualization. Probably best to scale all non-binary features to [0, 1]
+    - NMF clustering and FDR for top matches at each iteration
+        - Neither affects the greedy feature selection in any way.
+        - Pablo hinted that some of that was included  mainly because of reviewers' requests
+           and may not be important functionality now.
+        - If we do NMF, I suggest using BIC instead of the cophenetic correlation to select k. It requires fitting
+           only a single model at each k, and so is faster. I have code for it.
+
+    Other things to add:
+    - Since the bandwidth is selected for each individual variable, not jointly, we could save some unnecessary
+       recomputation by pre-selecting all the bandwidths here and passing them to the IC computation.
+       This is not the main bottleneck; the savings may not be large. But it would make sense to try it.
+
     """
     while iter_count < max_iter:
         if len(selected_features) > 0:
@@ -197,11 +210,7 @@ def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parall
         print('iter {}'.format(iter_count + 1))
         sorted_cics = compute_cics(target, features_left, summary_feature, parallel=parallel).sort_values(ascending=False)
         """
-        The NMF clustering of the top N features would go here.
-        Also the FDR/pvalue computation with permutations for the top features.
-        However, neither affect the greedy feature selection in any way.
-        And Pablo hinted that some of that was included mainly because of
-         reviewers' requests and may not be important functionality now.
+        The NMF clustering and FDR computation for the top N features would go here.
         """
         best_feature = sorted_cics.index[0]
         selected_features.append(best_feature)

@@ -1,10 +1,16 @@
-import readline
+import readline # not directly used, but avoids an import error in rpy2
 import numpy as np
 from scipy.stats import pearsonr
 from statsmodels.nonparametric.kernel_density import KDEMultivariate
 import scipy.optimize
 from sklearn.model_selection import KFold
 
+"""
+R's bandwidth selection seems to still be better and faster
+ than any alternative we've found so far in Python. This code
+ uses it via rpy2 if available, and falls back on a Python
+ alternative
+"""
 
 def module_exists(module_name):
     try:
@@ -65,7 +71,7 @@ def compute_bandwidth(x, var_type='c', rless=False):
         bw = xval_select_bw(x, var_type=var_type)
         # delta = 'cv_ml'
     else:
-        bw = rbcv(x) / 4
+        bw = rbcv(x) / 4  # scaling factor to make equivalent because different conventions are used
     return bw
 
 
@@ -168,7 +174,7 @@ def compute_mutual_information(x, y, z=None, n_grid=25, var_types=None,
         return cmi
 
 
-def compute_ic(x, y, z=None, n_grid=25, var_types=None, bandwidths=None, rless=False):
+def compute_ic(x, y, z=None, n_grid=25, var_types=None, bandwidths=None, rless=False, raise_errors=False):
     """
     :param x: array-like, (n_samples,)
     :param y: array-like, (n_samples,)
@@ -176,7 +182,6 @@ def compute_ic(x, y, z=None, n_grid=25, var_types=None, bandwidths=None, rless=F
     :param n_grid: int, number of grid points at which to evaluate kernel density
     :param var_types: three-character string of 'c' (continuous), 'u' (unordered discrete) or 'o' (ordered discrete)
     """
-
     try:
         variables = [x, y]
         if z is not None:
@@ -191,8 +196,9 @@ def compute_ic(x, y, z=None, n_grid=25, var_types=None, bandwidths=None, rless=F
         ic = ic_sign * np.sqrt(1 - np.exp(- 2 * mi))
     except Exception as e:
         print(e)
-        raise(e)
         ic = 0
+        if raise_errors:
+            raise(e)
     return ic
 
 

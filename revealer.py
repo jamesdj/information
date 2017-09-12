@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import scipy.optimize
 from sklearn.base import BaseEstimator, RegressorMixin
+import matplotlib.pyplot as plt
 
 from .information import compute_ic
 
@@ -43,8 +44,8 @@ class NNLS(BaseEstimator, RegressorMixin):
 def linear_combine(features, target):
     """
     Could use a regular linear regression:
-    from sklearn.linear_model import LinearRegression
-    lr = LinearRegression()
+     from sklearn.linear_model import LinearRegression
+     lr = LinearRegression()
     But I think the coefficients should be constrained to be non-negative
     because these are positively correlated features,
     and our combination strategies are additive in nature.
@@ -81,12 +82,12 @@ def is_binary(series):
     return False
 
 
-def cic(args):
+def compute_cic(args):
     x, y, z = args
     return compute_ic(x, y, z=z)
 
 
-def compute_ics(target, feature_df, seed=None, parallel=True):
+def compute_cics(target, feature_df, seed=None, parallel=True):
     if parallel:
         nprocs = os.cpu_count()
         pool = Pool(processes=nprocs)
@@ -97,7 +98,7 @@ def compute_ics(target, feature_df, seed=None, parallel=True):
             pool.join()
         signal.signal(signal.SIGINT, sigint_handler)
 
-        results = pool.map(cic, [(target, feature_df.loc[:, feature], seed) for feature in feature_df.columns])
+        results = pool.map(compute_cic, [(target, feature_df.loc[:, feature], seed) for feature in feature_df.columns])
         ics = pd.Series(results, index=feature_df.columns)
         pool.close()
         pool.join()
@@ -108,7 +109,24 @@ def compute_ics(target, feature_df, seed=None, parallel=True):
     return ics
 
 
-def revealer(target, features, seeds=None, max_iter=5, combine='auto', parallel=True):
+def plot_matches(t, features, selected):
+    t = t.sort_values(ascending=False)
+    to_show = pd.concat([t, features.loc[t.index, selected]], axis=1).T
+    plt.matshow(to_show)
+    n, m = to_show.shape
+    plt.tick_params(
+        axis='x',          # changes apply to the x-axis
+        which='both',      # both major and minor ticks are affected
+        bottom='off',      # ticks along the bottom edge are off
+        top='off',         # ticks along the top edge are off
+        labelbottom='off')
+    plt.xticks([])
+    plt.yticks(range(n), to_show.index, **{'fontsize':20})
+    plt.ylabel("features", fontsize=20)
+    plt.xlabel('samples', fontsize=20);
+
+
+def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parallel=True):
     """
     REVEALER is a greedy iterative search for features matching a target.
     At each iteration, previously selected features are combined to a summary feature.
@@ -119,7 +137,7 @@ def revealer(target, features, seeds=None, max_iter=5, combine='auto', parallel=
     Parameters
     ----------
     target : pandas Series, (n_samples,)
-    features : pandas DataFrame, (n_samples, n_features)
+    features_df : pandas DataFrame, (n_samples, n_features)
     seeds : None or list, optional (default = None)
         names of seed features; must be columns in the features DataFrame
     max_iter : int, optional (default = 5)
@@ -149,14 +167,19 @@ def revealer(target, features, seeds=None, max_iter=5, combine='auto', parallel=
     """
     selected_features = [] if seeds is None else seeds
     iter_count = 0
-    n_samples, n_features = features.shape
+    n_samples, n_features = features_df.shape
     max_iter = min(max_iter, n_features)
     prev_summary_ic = -1
-    are_binary = pd.Series([is_binary(features.loc[:, feature]) for feature in features.columns],
-                           index=features.columns)
+    are_binary = pd.Series([is_binary(features_df.loc[:, feature]) for feature in features_df.columns],
+                           index=features_df.columns)
+    """
+    Since the bandwidth is selected for each individual variable, not jointly, we could save some unnecessary
+     recomputation by pre-selecting all the bandwidths here and passing them to the IC computation.
+    This is not the main bottleneck; the savings may not be large. But it would make sense to try it.
+    """
     while iter_count < max_iter:
         if len(selected_features) > 0:
-            summary_feature = combine_features(features.loc[:, selected_features], target,
+            summary_feature = combine_features(features_df.loc[:, selected_features], target,
                                                are_binary.loc[selected_features],
                                                mode=combine)
             summary_ic = compute_ic(target, summary_feature)
@@ -167,13 +190,17 @@ def revealer(target, features, seeds=None, max_iter=5, combine='auto', parallel=
             print('Summary IC: {:.3}'.format(summary_ic))
         else:
             summary_feature = None
-        features_left = features.drop(selected_features, axis=1)
+        features_left = features_df.drop(selected_features, axis=1)
         print('iter {}'.format(iter_count + 1))
-        sorted_ics = compute_ics(target, features_left, summary_feature, parallel=parallel).sort_values(ascending=False)
-        # The NMF clustering of the top N features etc. would go here.
-        # also the FDR/pvalue computation with permutations
-        # but it doesn't affect the greedy feature selection in any way.
-        best_feature = sorted_ics.index[0]
+        sorted_cics = compute_cics(target, features_left, summary_feature, parallel=parallel).sort_values(ascending=False)
+        """
+        The NMF clustering of the top N features would go here.
+        Also the FDR/pvalue computation with permutations for the top features.
+        However, neither affect the greedy feature selection in any way.
+        And Pablo hinted that some of that was included mainly because of
+         reviewers' requests and may not be important functionality now.
+        """
+        best_feature = sorted_cics.index[0]
         selected_features.append(best_feature)
         iter_count += 1
     return selected_features

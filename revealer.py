@@ -115,15 +115,15 @@ def plot_matches(t, features, selected):
     plt.matshow(to_show)
     n, m = to_show.shape
     plt.tick_params(
-        axis='x',          # changes apply to the x-axis
-        which='both',      # both major and minor ticks are affected
-        bottom='off',      # ticks along the bottom edge are off
-        top='off',         # ticks along the top edge are off
+        axis='x',
+        which='both',
+        bottom='off',
+        top='off',
         labelbottom='off')
     plt.xticks([])
     plt.yticks(range(n), to_show.index, **{'fontsize':20})
     plt.ylabel("features", fontsize=20)
-    plt.xlabel('samples', fontsize=20);
+    plt.xlabel('samples', fontsize=20)
 
 
 def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parallel=True):

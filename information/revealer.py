@@ -304,6 +304,7 @@ def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parall
         selected_features.append(best_feature)
         excluded_features.extend(sorted_cics[sorted_cics < exclude_threshold].index)
         iter_count += 1
+    plot_matches(target, features_df, selected_features)
     return selected_features
 
 ########################################################################################################################

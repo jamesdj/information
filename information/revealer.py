@@ -230,6 +230,11 @@ def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parall
     Kim et al. 2015 Characterizing genomic alterations in cancer by complementary functional associations
     https://www.ncbi.nlm.nih.gov/pubmed/27088724
     """
+    """
+    May not need this scaling inside the algorithm and could leave it in the plotting functions
+     unless 1) we do NMF or 2) we think it's important that some variables could be identical after scaling
+     i.e. one is a multiple of another--but I think that's a pretty remote possibility in most cases...
+    """
     features_df = scale_features_between_zero_and_one(features_df)
     features_df = consolidate_identical_features(features_df)
     n_samples, n_features = features_df.shape
@@ -293,7 +298,7 @@ def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parall
                                    bandwidths=bandwidths,
                                    parallel=parallel).sort_values(ascending=False)
         """
-        The NMF clustering and FDR computation for the top N features would go here.
+        The NMF clustering and/or FDR computation for the top N features would go here.
         """
         best_feature = sorted_cics.index[0]
         selected_features.append(best_feature)

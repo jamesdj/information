@@ -24,7 +24,7 @@ have_rpy = module_exists('rpy2')
 
 if have_rpy:
     # For bcv():
-    #print("rpy2 found!")
+    # print("rpy2 found!")
     import rpy2.robjects as ro
     from rpy2.robjects.numpy2ri import numpy2ri
 

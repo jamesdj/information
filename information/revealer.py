@@ -277,7 +277,6 @@ class Revealer:
             if features_left.shape[1] == 0:
                 break
             #print('iter {}'.format(iter_count + 1))
-
             if self.combine_first:
                 combined = pd.concat([self.combine_features(selected_features + [feature])
                                       for feature in features_left.columns], axis=1)
@@ -314,7 +313,7 @@ class Revealer:
             if self.precompute_bandwidths:
                 self.bandwidths[summary_feature.name] = compute_single_bandwidth(summary_feature)
             if summary_ic - prev_summary_ic < 10E-8:
-                selected_features = self.selected_features[:-1]
+                selected_features = selected_features[:-1]
                 break
             else:
                 summary_ics.append(summary_ic)

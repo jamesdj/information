@@ -2,6 +2,7 @@ import os
 import signal
 from collections import defaultdict
 from multiprocessing import Pool
+import copy
 
 import numpy as np
 import pandas as pd
@@ -56,39 +57,6 @@ def linear_combine(features, target):
     lr = NNLS()
     lr.fit(features, target)
     return pd.Series(lr.predict(features), index=features.index)
-
-
-def combine_features(features_subdf, target, are_binary, mode='auto'):
-    if features_subdf.ndim == 1:
-        return features_subdf
-    else:
-        n, m = features_subdf.shape
-        if m == 1:
-            return features_subdf
-        else:
-            if mode == 'auto':
-                """
-                Detect and max binary features, then linear combine this max along with the remaining features
-                """
-                n_binary = are_binary.sum()
-                if n_binary == 0:
-                    summary_feature = linear_combine(features_subdf, target)
-                elif n_binary == len(are_binary):
-                    summary_feature = features_subdf.max(axis=1)
-                else:
-                    bin_max = features_subdf.T[are_binary].max(axis=0)
-                    conc = pd.concat([features_subdf.T[~are_binary].T, bin_max], axis=1)
-                    summary_feature = linear_combine(conc, target)
-            elif mode == 'linear':
-                summary_feature = linear_combine(features_subdf, target)
-            elif mode == 'max':
-                summary_feature = features_subdf.max(axis=1)
-            elif mode == 'mean':
-                summary_feature = features_subdf.mean(axis=1)
-            else:
-                raise ValueError('{} not a supported feature combination mode'.format(mode))
-            summary_feature.name = 'summary'
-            return summary_feature
 
 
 def count_unique_values_in_columns(features_df):
@@ -165,41 +133,6 @@ def consolidate_identical_features(df):
 
 # Visualization
 
-# Todo: move "features" down centered on only the matched features
-# Todo: include the summary feature(s)?
-def plot_matches(t, features, selected, ics, pvals=None, out_file=None, name_samples=False):
-    features = screen_features(features)
-    #print(features)
-    t = t.sort_values(ascending=False)
-    to_show = pd.concat([t, features.loc[t.index, selected]], axis=1)
-    to_show = scale_features_between_zero_and_one(to_show).T # redundant now?
-    f, ax = plt.subplots()
-    n_fig_rows = len(selected) + 1
-    f.set_size_inches((6, n_fig_rows / 2))
-    ax.matshow(to_show, aspect='auto')
-    n, m = to_show.shape
-    plt.tick_params(
-        axis='x',
-        which='both',
-        bottom='off',
-        top='off',
-        labelbottom='off')
-    if name_samples:
-        ax.set_xticks(range(len(features)))
-        ax.set_xticklabels(features.index, rotation=90)
-        ax.xaxis.tick_bottom()
-    else:
-        plt.xticks([])
-    plt.yticks(range(n), to_show.index, **{'fontsize': 20})
-    plt.ylabel("features", fontsize=20)
-    plt.xlabel('samples', fontsize=20)
-    ax = add_rtexts_to_plot(ax, ['IC'] + ['{:.2}'.format(ic) for ic in ics], x_offset=0.03)
-    if pvals is not None:
-        add_rtexts_to_plot(ax, ['p'] + ['{:.2}'.format(p) for p in pvals], x_offset=0.2)
-    if out_file is not None:
-        plt.savefig(out_file)
-    return f
-
 
 def add_rtexts_to_plot(ax, rtexts, x_offset):
     ymax, ymin = ax.get_ylim()
@@ -224,8 +157,11 @@ def write_figures_to_pdf(figures, pdf_file):
 ########################################################################################################################
 
 
-def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parallel=True,
-             exclude_threshold=0.0, precompute_bandwidths=True, combine_first=True):
+def permute_series(series):
+    return pd.Series(np.random.permutation(series.values), name=series.name, index=series.index)
+
+
+class Revealer:
     """
     REVEALER is a greedy iterative search for features matching a target.
     At each iteration, previously selected features are combined to a summary feature.
@@ -241,7 +177,7 @@ def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parall
         names of seed features; must be columns in the features DataFrame
     max_iter : int, optional (default = 5)
         maximum number of iterations
-    combine : str, optional (default = 'auto')
+    combine_mode : str, optional (default = 'auto')
         Strategy for combining selected features. Possible values:
         - 'max': maximum, suitable for binary features
         - 'linear': a linear combination of the features is chosen that
@@ -261,14 +197,8 @@ def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parall
     combine_first : boolean, optional (default = True)
         Whether to combine features and compute IC, rather than compute CIC and then combine.
         CIC is slower to compute, so this can result in a speedup
-        Results will be identical if combine=='max',
+        Results should be identical if combine=='max',
         and similar but possibly not identical for other combination modes.
-
-
-
-    Returns
-    -------
-    selected_features: list of features in order of selection
 
 
     Notes
@@ -277,159 +207,239 @@ def revealer(target, features_df, seeds=None, max_iter=5, combine='auto', parall
     Kim et al. 2015 Characterizing genomic alterations in cancer by complementary functional associations
     https://www.ncbi.nlm.nih.gov/pubmed/27088724
     """
-    """
-    May not need this scaling inside the algorithm and could leave it in the plotting functions
-     unless 1) we do NMF or 2) we think it's important that some variables could be identical after scaling
-     i.e. one is a multiple of another--but I think that's a pretty remote possibility in most cases...
-    """
 
-    features_df = screen_features(features_df)
-    ns_unique_vals = count_unique_values_in_columns(features_df)
-    n_samples, n_features = features_df.shape
-    are_binary = ns_unique_vals == 2
-
-    """
-    Bandwidth computation is not a main bottleneck; the savings are not large.
-    It may or may not be problematic when the data has missing entries, because when two or three features are
-     considered together for IC/CIC, only the samples at which all 2 or 3 are nonnan are considered, whereas
-     for a precomputed bandwidth all nonnan samples for each individual feature are considered.
-    """
-
-    if precompute_bandwidths:
-        bandwidths = {}
-        for col in features_df.columns:
-            bandwidths[col] = compute_single_bandwidth(features_df.loc[:, col])
-        bandwidths[target.name] = compute_single_bandwidth(target)
-    else:
-        bandwidths = None
-
-    """
-    Missing functionality:
-    - consolidation of very similar features
-    - NMF clustering and FDR/p-values for top matches at each iteration
-        - Neither affects the greedy feature selection.
-        - Pablo hinted that some of that was included mainly because of reviewers' requests
-           and may not be important functionality now. We should talk with him and decide details.
-        - If we do NMF, I suggest using BIC instead of the cophenetic correlation to select k. It requires fitting
-           only a single model at each k, and so is faster. Code for this below.
-    """
-    selected_features = [] if seeds is None else seeds
-    excluded_features = []
-    max_iter = min(max_iter, n_features)
-    iter_count = 0
-    prev_summary_ic = -1
-
-    if len(selected_features) > 0:
-        summary_feature = combine_features(features_df.loc[:, selected_features],
-                                           target,
-                                           are_binary.loc[selected_features],
-                                           mode=combine)
-        if precompute_bandwidths:
-            bandwidths[summary_feature.name] = compute_single_bandwidth(summary_feature)
-    else:
-        summary_feature = None
-
-    summary_ics = []
-
-    while iter_count < max_iter:
-        features_left = features_df.drop(selected_features + excluded_features, axis=1)
-        if features_left.shape[1] == 0:
-            break
-        #print('iter {}'.format(iter_count + 1))
-
-        if combine_first:
-
-            #if len(selected_features) == 0:
-            #    combined = features_left
-            #else:
-            combined = pd.concat([combine_features(features_df.loc[:, selected_features + [feature]],
-                                               target,
-                                               are_binary.loc[selected_features + [feature]],
-                                               mode=combine) for feature in features_left.columns], axis=1)
-
-            #print(combined.shape, features_left.shape)
-            combined.columns = features_left.columns
-            #print(combined)
-            sorted_cics = compute_cics(target,
-                                       combined,
-                                       None,
-                                       bandwidths=None,
-                                       parallel=parallel).sort_values(ascending=False)
-            #print(sorted_cics)
-            best_feature = sorted_cics.index[0]
-            summary_feature = combined.loc[:, best_feature]
-            summary_feature.name = 'summary'
-            summary_ic = sorted_cics.loc[best_feature]
-            selected_features.append(best_feature)
+    def __init__(self,
+                 target,
+                 features_df,
+                 seeds=None,
+                 max_iter=5,
+                 combine_mode='auto',
+                 parallel=True,
+                 exclude_threshold=0.0,
+                 precompute_bandwidths=True,
+                 combine_first=True):
+        self.target = target
+        self.features_df = screen_features(features_df).loc[target.index]
+        # Todo: maybe include code for combining very similar features
+        """
+        May not need feature scaling inside the algorithm and could leave it in the plotting functions
+         unless 1) we do NMF or 2) we think it's important that some variables could be identical after scaling
+         i.e. one is a multiple of another--but I think that's a pretty remote possibility in most cases...
+        """
+        ns_unique_vals = count_unique_values_in_columns(features_df)
+        self.n_samples, self.n_features = features_df.shape
+        self.are_binary = ns_unique_vals == 2
+        self.seeds = seeds
+        self.max_iter = min(max_iter, self.n_features)
+        if combine_mode not in 'auto linear max mean'.split():
+            raise ValueError('{} not a supported feature combination mode'.format(combine_mode))
+        self.combine_mode = combine_mode
+        self.parallel = parallel
+        self.exclude_threshold = exclude_threshold
+        self.precompute_bandwidths = precompute_bandwidths
+        self.combine_first = combine_first
+        if self.precompute_bandwidths:
+            self.bandwidths = {}
+            for col in features_df.columns:
+                self.bandwidths[col] = compute_single_bandwidth(features_df.loc[:, col])
+            self.bandwidths[target.name] = compute_single_bandwidth(target)
         else:
-            sorted_cics = compute_cics(target,
-                                       features_left,
-                                       summary_feature,
-                                       bandwidths=bandwidths,
-                                       parallel=parallel).sort_values(ascending=False)
-            """
-            I'm realizing that probably combining features and then taking straight IC is probably much faster than doing
-             conditional IC. It may be as much as a 3x speedup.
-            """
+            self.bandwidths = None
+        """
+        Bandwidth computation is not a main bottleneck; the savings are not large.
+        It may or may not be problematic when the data has missing entries, because when two or three features are
+         considered together for IC/CIC, only the samples at which all 2 or 3 are nonnan are considered, whereas
+         for a precomputed bandwidth all nonnan samples for each individual feature are considered.
+        """
+        self.selected_features = None
+        self.summary_ics = None
+        self.cum_pvals = None
+
+    def match(self):
+        """
+
+        """
+        selected_features = [] if self.seeds is None else self.seeds
+        summary_ics = []
+        excluded_features = []
+        iter_count = 0
+        prev_summary_ic = -1
+
+        if len(selected_features) > 0:
+            summary_feature = self.combine_features(selected_features)
+            if self.precompute_bandwidths:
+                self.bandwidths[summary_feature.name] = compute_single_bandwidth(summary_feature)
+        else:
+            summary_feature = None
+
+        while iter_count < self.max_iter:
+            features_left = self.features_df.drop(selected_features + excluded_features, axis=1)
+            if features_left.shape[1] == 0:
+                break
+            #print('iter {}'.format(iter_count + 1))
+
+            if self.combine_first:
+                combined = pd.concat([self.combine_features(selected_features + [feature])
+                                      for feature in features_left.columns], axis=1)
+                combined.columns = features_left.columns
+                sorted_cics = compute_cics(self.target,
+                                           combined,
+                                           None,
+                                           bandwidths=None,
+                                           parallel=self.parallel).sort_values(ascending=False)
+                best_feature = sorted_cics.index[0]
+                summary_feature = combined.loc[:, best_feature]
+                summary_feature.name = 'summary'
+                summary_ic = sorted_cics.loc[best_feature]
+                selected_features.append(best_feature)
+            else:
+                sorted_cics = compute_cics(self.target,
+                                           features_left,
+                                           summary_feature,
+                                           bandwidths=self.bandwidths,
+                                           parallel=self.parallel).sort_values(ascending=False)
+                best_feature = sorted_cics.index[0]
+                selected_features.append(best_feature)
+                summary_feature = self.combine_features(selected_features)
+                summary_ic = compute_ic(self.target, summary_feature)
             """
             The NMF clustering and/or FDR computation for the top N features would go here.
+            - Neither affects the greedy feature selection.
+            - Pablo hinted that some of that was included mainly because of reviewers' requests
+               and may not be important functionality now. We should talk with him and decide details.
+            - If we do NMF, I suggest using BIC instead of the cophenetic correlation to select k.
+               It requires fitting only a single model at each k, and so is faster. Code for this below.
             """
-            best_feature = sorted_cics.index[0]
-            selected_features.append(best_feature)
-            summary_feature = combine_features(features_df.loc[:, selected_features],
-                                               target,
-                                               are_binary.loc[selected_features],
-                                               mode=combine)
-            summary_ic = compute_ic(target, summary_feature)
+            excluded_features.extend(sorted_cics[sorted_cics < self.exclude_threshold].index)
+            if self.precompute_bandwidths:
+                self.bandwidths[summary_feature.name] = compute_single_bandwidth(summary_feature)
+            if summary_ic - prev_summary_ic < 10E-8:
+                selected_features = self.selected_features[:-1]
+                break
+            else:
+                summary_ics.append(summary_ic)
 
-        excluded_features.extend(sorted_cics[sorted_cics < exclude_threshold].index)
-        if precompute_bandwidths:
-            bandwidths[summary_feature.name] = compute_single_bandwidth(summary_feature)
-        if summary_ic <= prev_summary_ic:
-            selected_features = selected_features[:-1]
-            break
+            prev_summary_ic = summary_ic
+            #print('Summary IC: {:.3}'.format(summary_ic))
+            iter_count += 1
+        self.selected_features = selected_features
+        self.summary_ics = summary_ics
+        return self
+
+    def combine_features(self, selected_features):
+        features_subdf = self.features_df.loc[:, selected_features]
+        are_binary = self.are_binary.loc[selected_features]
+        if features_subdf.ndim == 1:
+            summary_feature = features_subdf.copy()
         else:
-            summary_ics.append(summary_ic)
+            n, m = features_subdf.shape
+            if m == 1:
+                summary_feature = features_subdf.copy().iloc[:, 0]
+            else:
+                if self.combine_mode == 'auto':
+                    """
+                    Detect and max binary features, then linear combine this max along with the remaining features
+                    """
+                    n_binary = self.are_binary.sum()
+                    if n_binary == 0:
+                        summary_feature = linear_combine(features_subdf, self.target)
+                    elif n_binary == len(are_binary):
+                        summary_feature = features_subdf.max(axis=1)
+                    else:
+                        bin_max = features_subdf.T[are_binary].max(axis=0)
+                        conc = pd.concat([features_subdf.T[~are_binary].T, bin_max], axis=1)
+                        summary_feature = linear_combine(conc, self.target)
+                elif self.combine_mode == 'linear':
+                    summary_feature = linear_combine(features_subdf, self.target)
+                elif self.combine_mode == 'max':
+                    summary_feature = features_subdf.max(axis=1)
+                elif self.combine_mode == 'mean':
+                    summary_feature = features_subdf.mean(axis=1)
+        summary_feature.name = 'summary'
+        return summary_feature
 
-        prev_summary_ic = summary_ic
-        #print('Summary IC: {:.3}'.format(summary_ic))
-        iter_count += 1
-    return selected_features, summary_ics
+    def compute_pvals(self, n_permutations=100):
+        # Todo: allow both pvals at each step and cumulative pvals
+        # Todo: allow user to choose which to compute
+        # maybe it would be better to do individual (not cumulative) pvals in the main loop?
+        """
+        indiv_p_vals = pd.Series(index=range(len(self.selected_features)))
+        if self.combine_first:
+            for i, feature in enumerate(self.selected_features):
+                so_far = self.selected_features[:i + 1]
+                combined = combine_features(so_far)
 
 
-def revealer_pvals(ics, t, features_df, selected_features, n_permutations=100, combine='auto', combine_first=True):
-    # Todo: allow both pvals at each step and cumulative pvals
-    # Todo: allow user to choose which to compute
-    # This would require that the features_df go through the same consolidation first
-    # maybe it would be better to do individual pvals in the main loop?
-    # it still would make sense to do data normalization/consolidation here
-    # before cum pval runs to avoid redoing each time
-    # This also requires that selected_features be passed; otherwise, this is not necessary.
-    """
-    indiv_p_vals = pd.Series(index=range(len(selected_features)))
-    if combine_first:
-        for i, feature in enumerate(selected_features):
-            so_far = selected_features[:i + 1]
-            combined = combine_features(features_df.loc[:, so_far],
-                                        t,
-                                        are_binary.loc[selected_features],
-                                        mode=combine)
-            for p in range(n_permutations):
-                permed = pd.Series(np.random.permutation(t.values), name=t.name, index=t.index)
-    """
+                for p in range(n_permutations):
+                    perm_target = permute_series(self.target)
+                    p_ic = compute_ic(combined, perm_target)
+        """
 
-    n_iter = len(ics)
-    p_ics_df = pd.DataFrame(index=range(n_permutations), columns=range(n_iter))
-    for p in range(n_permutations):
-        permed = pd.Series(np.random.permutation(t.values), name=t.name, index=t.index)
-        p_sel, p_ics = revealer(permed, features_df, combine=combine, combine_first=combine_first)
-        max_vals = min(len(p_ics), n_iter)
-        p_ics_df.iloc[p, :max_vals] = p_ics[:max_vals]
-    p_ics_df = p_ics_df.T.fillna(method='ffill').T.iloc[:, :n_iter]
-    sic = pd.Series(ics)
-    cum_p_vals = (p_ics_df > sic).sum(axis=0) / n_permutations
-    return cum_p_vals
+        n_iter = len(self.summary_ics)
+        p_ics_df = pd.DataFrame(index=range(n_permutations), columns=range(n_iter))
+        for p in range(n_permutations):
+            perm_target = permute_series(self.target)
+            perm_revealer = copy.deepcopy(self)
+            perm_revealer.target = perm_target
+            perm_revealer.selected_features = [] if self.seeds is None else self.seeds
+            perm_revealer.summary_ics = []
+            perm_revealer.fig = None
+            perm_revealer.match()
+            p_sel, p_ics = perm_revealer.selected_features, perm_revealer.summary_ics
+            max_vals = min(len(p_ics), n_iter)
+            p_ics_df.iloc[p, :max_vals] = p_ics[:max_vals]
+        p_ics_df = p_ics_df.T.fillna(method='ffill').T.iloc[:, :n_iter]
+        sic = pd.Series(self.summary_ics)
+        self.cum_pvals = (p_ics_df > sic).sum(axis=0) / n_permutations
+        return self
 
+    def plot_matches(self,
+                     out_file=None,
+                     name_samples=False,
+                     title=None,
+                     dpi=None,
+                     cmap=None,
+                     ylabel='features',
+                     xlabel='samples'):
+        # Todo: move "features" down centered on only the matched features
+        # Todo: include the summary feature(s)?
+        # print(features)
+        t = self.target.sort_values(ascending=False)
+        to_show = pd.concat([t, self.features_df.loc[t.index, self.selected_features]], axis=1)
+        to_show = scale_features_between_zero_and_one(to_show).T  # redundant now?
+        fig, ax = plt.subplots()
+        n_fig_rows = len(self.selected_features) + 1
+        fig.set_size_inches((6, n_fig_rows / 2))
+        ax.matshow(to_show, aspect='auto', cmap=cmap)
+        n, m = to_show.shape
+        plt.tick_params(
+            axis='x',
+            which='both',
+            bottom='off',
+            top='off',
+            labelbottom='off')
+        if name_samples:
+            ax.set_xticks(range(len(t)))
+            ax.set_xticklabels(t.index, rotation=90)
+            ax.xaxis.tick_bottom()
+        else:
+            plt.xticks([])
+        plt.yticks(range(n), to_show.index, **{'fontsize': 20})
+        plt.ylabel(ylabel, fontsize=20)
+        plt.xlabel(xlabel, fontsize=20)
+        if title is not None:
+            plt.title(title, fontsize=20)
+        ax = add_rtexts_to_plot(ax,
+                                ['IC'] + ['{0:.2f}'.format(ic).lstrip('0') for ic in self.summary_ics],
+                                x_offset=0.03)
+        ax.grid(False)
+        if self.cum_pvals is not None:
+            add_rtexts_to_plot(ax,
+                               ['p'] + ['{0:.2f}'.format(p).lstrip('0') for p in self.cum_pvals],
+                               x_offset=0.15)
+        if out_file is not None:
+            plt.savefig(out_file, bbox_inches='tight', dpi=dpi)
+        return fig, ax
 
 ########################################################################################################################
 

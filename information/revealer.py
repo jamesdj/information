@@ -260,7 +260,10 @@ class Revealer:
 
         """
         selected_features = [] if self.seeds is None else self.seeds
-        summary_ics = []
+        #if self.combine_first:
+        summary_ics = [compute_ic(self.target, self.combine_features(self.seeds[:i + 1])) for i in range(len(self.seeds))]
+        # todo: else
+
         excluded_features = []
         iter_count = 0
         prev_summary_ic = -1
@@ -380,7 +383,8 @@ class Revealer:
             perm_target = permute_series(self.target)
             perm_revealer = copy.deepcopy(self)
             perm_revealer.target = perm_target
-            perm_revealer.selected_features = [] if self.seeds is None else self.seeds
+            perm_revealer.selected_features = [] #if self.seeds is None else self.seeds
+            perm_revealer.seeds = None  # Todo: possibly better to apply the same permutation to the seeds as to the target
             perm_revealer.summary_ics = []
             perm_revealer.fig = None
             perm_revealer.match()

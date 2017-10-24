@@ -75,6 +75,7 @@ def compute_cic(args):
 
 
 def compute_cics(target, feature_df, seed=None, bandwidths=None, parallel=True):
+    # Todo: joblib for parallelization
     if parallel:
         nprocs = os.cpu_count()
         pool = Pool(processes=nprocs)
@@ -229,7 +230,7 @@ class Revealer:
         ns_unique_vals = count_unique_values_in_columns(features_df)
         self.n_samples, self.n_features = features_df.shape
         self.are_binary = ns_unique_vals == 2
-        self.seeds = seeds
+        self.seeds = [] if seeds is None else seeds
         self.max_iter = min(max_iter, self.n_features)
         if combine_mode not in 'auto linear max mean'.split():
             raise ValueError('{} not a supported feature combination mode'.format(combine_mode))
@@ -248,8 +249,8 @@ class Revealer:
         """
         Bandwidth computation is not a main bottleneck; the savings are not large.
         It may or may not be problematic when the data has missing entries, because when two or three features are
-         considered together for IC/CIC, only the samples at which all 2 or 3 are nonnan are considered, whereas
-         for a precomputed bandwidth all nonnan samples for each individual feature are considered.
+         considered together for IC/CIC, only the samples at which all 2 or 3 features are nonnan are considered, 
+         whereas for a precomputed bandwidth all nonnan samples for each individual feature are considered.
         """
         self.selected_features = None
         self.summary_ics = None
@@ -259,7 +260,7 @@ class Revealer:
         """
 
         """
-        selected_features = [] if self.seeds is None else self.seeds
+        selected_features = list(self.seeds)
         #if self.combine_first:
         summary_ics = [compute_ic(self.target, self.combine_features(self.seeds[:i + 1])) for i in range(len(self.seeds))]
         # todo: else
@@ -384,7 +385,7 @@ class Revealer:
             perm_revealer = copy.deepcopy(self)
             perm_revealer.target = perm_target
             perm_revealer.selected_features = [] #if self.seeds is None else self.seeds
-            perm_revealer.seeds = None  # Todo: possibly better to apply the same permutation to the seeds as to the target
+            perm_revealer.seeds = []  # Todo: possibly better to apply the same permutation to the seeds as to the target
             perm_revealer.summary_ics = []
             perm_revealer.fig = None
             perm_revealer.match()

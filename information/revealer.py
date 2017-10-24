@@ -248,9 +248,11 @@ class Revealer:
             self.bandwidths = None
         """
         Bandwidth computation is not a main bottleneck; the savings are not large.
-        It may or may not be problematic when the data has missing entries, because when two or three features are
+        There is a difference when the data has missing entries, because when two or three features are
          considered together for IC/CIC, only the samples at which all 2 or 3 features are nonnan are considered, 
          whereas for a precomputed bandwidth all nonnan samples for each individual feature are considered.
+         However, I would think the bandwidth computed using more samples would generally be better; it may differ 
+         slightly from the other, but I don't think that's a deficiency.
         """
         self.selected_features = None
         self.summary_ics = None
